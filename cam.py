@@ -6,18 +6,18 @@ from datetime import datetime
 import shutil
 import sys
 
-# Define constants
-TRIGGER_PIN = 27        # GPIO pin for trigger button
-SHUTDOWN_PIN = 23       # GPIO pin for shutdown button
-OUTPUT_PIN = 22         # GPIO pin to set HIGH at start
-LED_PATH = "/sys/class/leds/ACT/brightness"  # Path to control the built-in LED
+# Konstanty
+TRIGGER_PIN = 27
+SHUTDOWN_PIN = 23
+OUTPUT_PIN = 22
+LED_PATH = "/sys/class/leds/ACT/brightness"
 USB_MOUNT_PATH = "/media/usb"
-RAM_TEMP_PATH = "/dev/shm/photo.jpg"  # Temporary storage in RAM
+RAM_TEMP_PATH = "/dev/shm/photo.jpg"
 
-# Initialize pigpio library and set OUTPUT_PIN to HIGH immediately
+# Inicializace GPIO
 pi = pigpio.pi()
 pi.set_mode(OUTPUT_PIN, pigpio.OUTPUT)
-pi.write(OUTPUT_PIN, 1)  # Set OUTPUT_PIN to HIGH right at the start
+pi.write(OUTPUT_PIN, 0)  # výchozí stav – LOW
 
 pi.set_mode(TRIGGER_PIN, pigpio.INPUT)
 pi.set_pull_up_down(TRIGGER_PIN, pigpio.PUD_UP)
@@ -25,10 +25,9 @@ pi.set_pull_up_down(TRIGGER_PIN, pigpio.PUD_UP)
 pi.set_mode(SHUTDOWN_PIN, pigpio.INPUT)
 pi.set_pull_up_down(SHUTDOWN_PIN, pigpio.PUD_UP)
 
-# Initialize last press time for debounce
 last_press_time = 0
 
-# Function to turn LED on or off
+# LED ovládání
 def led_on():
     with open(LED_PATH, 'w') as f:
         f.write('1')
@@ -37,77 +36,98 @@ def led_off():
     with open(LED_PATH, 'w') as f:
         f.write('0')
 
-# Turn on LED initially
 led_on()
 
-# Function to mount the USB drive with write permissions
+# Najdi připojený USB oddíl
+def find_usb_partition():
+    try:
+        result = subprocess.run(['lsblk', '-rno', 'NAME,TYPE'], capture_output=True, text=True)
+        for line in result.stdout.strip().split('\n'):
+            name, type_ = line.strip().split()
+            if type_ == 'part' and name.startswith('sd'):
+                return f"/dev/{name}"
+    except Exception as e:
+        print("Chyba při detekci USB oddílu:", e)
+    return None
+
+# Připojení USB disku
 def mount_usb():
     if not os.path.exists(USB_MOUNT_PATH):
         os.makedirs(USB_MOUNT_PATH)
-    if not os.path.ismount(USB_MOUNT_PATH):
-        subprocess.run(['sudo', 'umount', '-l', USB_MOUNT_PATH], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        subprocess.run(['sudo', 'mount', '-o', 'uid=raspi,gid=raspi,umask=000', '/dev/sda1', USB_MOUNT_PATH],
-                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
-# Mount USB at script start
-mount_usb()
+    usb_partition = find_usb_partition()
+    if usb_partition:
+        if not os.path.ismount(USB_MOUNT_PATH):
+            result = subprocess.run(['sudo', 'mount', usb_partition, USB_MOUNT_PATH],
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            if result.returncode == 0:
+                print("✅ USB disk připojen.")
+                pi.write(OUTPUT_PIN, 1)  # zapnout výstupní pin jen při úspěchu
+                return True
+            else:
+                print("❌ Připojení USB selhalo:", result.stderr.decode())
+    else:
+        print("⚠️ USB oddíl nebyl nalezen.")
+    return False
 
-# Function to capture an image
+# Pokus o připojení
+usb_ready = mount_usb()
+
+# Pořízení snímku
 def capture_image(filename):
+    if not usb_ready:
+        print("⛔️ USB není připojeno. Snímek nebude uložen.")
+        return
+
     temp_image_path = f"/dev/shm/{filename}.jpg"
     usb_image_path = os.path.join(USB_MOUNT_PATH, os.path.basename(temp_image_path))
 
-    # Capture image in RAM
     subprocess.run([
         "libcamera-still",
         "-o", temp_image_path,
-        "--width", "3264",   # Set resolution as desired
+        "--width", "3264",
         "--height", "2448",
         "--awb", "daylight",
-        "-t", "1",           # Immediate capture
+        "--quality", "90",
+        "-t", "1",
         "-n"
     ])
 
-    # Move image from RAM to USB
     try:
         shutil.move(temp_image_path, usb_image_path)
-        print(f"Photo saved to USB as {usb_image_path}")
+        print(f"📸 Snímek uložen na USB jako {usb_image_path}")
     except Exception as e:
-        print(f"Error saving photo to USB: {e}")
+        print(f"❌ Chyba při ukládání snímku: {e}")
 
-# Function to handle button press for capturing regular photos
+# Reakce na stisk spouště
 def capture_on_trigger(gpio, level, tick):
-    # Turn off LED when trigger is detected
     led_off()
-
-    # Capture the photo
     timestamp = datetime.now().strftime("IMG_%Y%m%d_%H%M%S")
     capture_image(timestamp)
-
-    # Turn LED back on after saving the photo
     led_on()
 
-# Function to handle shutdown with debounce
+# Vypínací tlačítko
 def shutdown_handler(gpio, level, tick):
     global last_press_time
     current_time = time.time()
-    if current_time - last_press_time > 0.2:  # 200 ms debounce
+    if current_time - last_press_time > 0.2:
         last_press_time = current_time
-        print("Shutdown signal received. Completing tasks...")
-        pi.write(OUTPUT_PIN, 0)  # Set OUTPUT_PIN to LOW
-        time.sleep(1)  # Ensure any pending tasks complete
-        print("Forcing Raspberry Pi shutdown.")
-        subprocess.run(['sudo', 'shutdown', '-h', 'now'])  # Force immediate shutdown
+        print("📴 Signál k vypnutí přijat.")
+        pi.write(OUTPUT_PIN, 0)
+        time.sleep(1)
+        #subprocess.run(['sudo', 'shutdown', '-h', 'now'])
+        subprocess.run(['sudo', 'systemctl', 'poweroff'])
 
-# Set up callbacks for button presses
-pi.callback(TRIGGER_PIN, pigpio.FALLING_EDGE, capture_on_trigger)
+# Callbacky
+pi.callback(TRIGGER_PIN, pigpio.RISING_EDGE, capture_on_trigger)
 pi.callback(SHUTDOWN_PIN, pigpio.FALLING_EDGE, shutdown_handler)
 
+# Hlavní smyčka
 try:
-    print("Camera ready. Waiting for trigger...")
+    print("📷 Kamera připravena. Čekám na stisk tlačítka...")
     while True:
-        time.sleep(0.1)  # Reduce CPU load
+        time.sleep(0.1)
 except KeyboardInterrupt:
-    print("Program terminated by user.")
+    print("🛑 Program ukončen uživatelem.")
 finally:
     pi.stop()

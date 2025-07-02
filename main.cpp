@@ -6,65 +6,89 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 
-#define SCREEN_WIDTH 128 // OLED display width, in pixels
-#define SCREEN_HEIGHT 32 // OLED display height, in pixels
+#define SCREEN_WIDTH 128  // OLED display width, in pixels
+#define SCREEN_HEIGHT 32  // OLED display height, in pixels
 
 // Declaration for an SSD1306 display connected to I2C (SDA, SCL pins)
-#define OLED_RESET     -1 // Reset pin # (or -1 if sharing Arduino reset pin)
-#define SCREEN_ADDRESS 0x3C ///< See datasheet for Address; 0x3D for 128x64, 0x3C for 128x32
+#define OLED_RESET -1        // Reset pin # (or -1 if sharing Arduino reset pin)
+#define SCREEN_ADDRESS 0x3C  ///< See datasheet for Address; 0x3D for 128x64, 0x3C for 128x32
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
-unsigned long stopwatchStart;
+int consecutiveZeroCount = 0;       // Global variable to track consecutive zeros
+const int ZERO_TRIGGER_COUNT = 10;  // Number of consecutive zeros required
+bool triggeredPrinted = false;      // To ensure 'triggered' is printed only once per zero sequence
 unsigned long lightCount = 0;
-float voltageSum = 0;
-int voltageReadings = 0;
+unsigned long stopwatchStart = 0;
+int value = 0;
+
+
 
 void setup() {
+  pinMode(2, OUTPUT);  // Set pin D2 as output
+  digitalWrite(2, LOW);
+  pinMode(5, OUTPUT);
+  pinMode(6, OUTPUT);
   pinMode(8, OUTPUT);
   pinMode(7, OUTPUT);
 
-  digitalWrite(8, HIGH);
-  digitalWrite(7, LOW);
-  pinMode(2, OUTPUT); // Set pin D2 as output
-  pinMode(A3, INPUT); // Set pin A3 as input for light measurement
-  digitalWrite(2, HIGH); // Set D2 to HIGH initially
-  pinMode(5, OUTPUT);
-  pinMode(6, OUTPUT);
-  pinMode(A2, INPUT); // Set pin A2 as input
-  pinMode(A1, INPUT); // Set pin A1 as input
-  pinMode(A0, INPUT); // Set pin A0 as input for voltage reading
-  digitalWrite(6, HIGH);
   digitalWrite(5, LOW);
+  digitalWrite(6, HIGH);
+  digitalWrite(7, LOW);
+  digitalWrite(8, HIGH);
+
+  pinMode(A0, INPUT);  // Set pin A0 as input for voltage reading
+  pinMode(A1, INPUT);  // Set pin A1 as input
+  pinMode(A2, INPUT);  // Set pin A2 as input
+  pinMode(A3, INPUT);  // Set pin A3 as input for light measurement
 
   // SSD1306_SWITCHCAPVCC = generate display voltage from 3.3V internally
-  if(!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
+  if (!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
     Serial.println(F("SSD1306 allocation failed"));
-    for(;;); // Don't proceed, loop forever
+    for (;;)
+      ;  // Don't proceed, loop forever
   }
   display.clearDisplay();
+  digitalWrite(2, LOW);  // D2 LOW before bootAnimation
   bootAnimation();
 
+  digitalWrite(2, LOW);  // D2 LOW before staticText
   staticText();
+  digitalWrite(2, LOW);  // D2 LOW before camWaitingAnimation
   camWaitingAnimation();
 
   stopwatchStart = millis();
 }
 
 void loop() {
-  // Light measurement and control of D2
-  int lightValue = analogRead(A3);
-  static bool lightTriggered = false;
+  value = analogRead(A3);
 
-  if (lightValue = 0 && !lightTriggered) {
-    lightCount++;
-    digitalWrite(2, LOW); // Set D2 to LOW if light is detected
-    lightTriggered = true;
-  } else if (lightValue >= 1 && lightTriggered) {
-    digitalWrite(2, HIGH); // Set D2 to HIGH when light value returns to normal
-    lightTriggered = false;
+  if (value == 0) {
+    consecutiveZeroCount++;
+    if (consecutiveZeroCount == ZERO_TRIGGER_COUNT && !triggeredPrinted) {
+      Serial.println("triggered");
+      lightCount++;
+      triggeredPrinted = true;
+      digitalWrite(2, HIGH);
+      delay(1000);
+      digitalWrite(2, LOW);
+    }
+  } else {
+    if (triggeredPrinted) {
+      Serial.print("Počet nul v sekvenci: ");
+      Serial.println(consecutiveZeroCount);
+    }
+    consecutiveZeroCount = 0;
+    triggeredPrinted = false;
   }
-  displayStatusScreen();
+  // Throttle display updates to every 200ms
+  static unsigned long lastDisplayUpdate = 0;
+  unsigned long now = millis();
+  if (now - lastDisplayUpdate > 200) {
+    displayStatusScreen();
+    lastDisplayUpdate = now;
+  }
 }
+
 
 void bootAnimation() {
   unsigned long startMillis = millis();
@@ -74,14 +98,14 @@ void bootAnimation() {
     display.clearDisplay();
 
     // Animated expanding and contracting circles
-    int radius1 = abs(15 - (currentMillis / 100) % 30); // Expands and contracts between radius 0-15
-    int radius2 = abs(10 - (currentMillis / 150) % 20); // Expands and contracts between radius 0-10
+    int radius1 = abs(15 - (currentMillis / 100) % 30);  // Expands and contracts between radius 0-15
+    int radius2 = abs(10 - (currentMillis / 150) % 20);  // Expands and contracts between radius 0-10
     display.drawCircle(SCREEN_WIDTH / 3, SCREEN_HEIGHT / 2, radius1, SSD1306_WHITE);
     display.drawCircle(2 * SCREEN_WIDTH / 3, SCREEN_HEIGHT / 2, radius2, SSD1306_WHITE);
 
     // Draw bouncing squares with varying sizes and speeds
-    int squareSize1 = 6 + (currentMillis / 500) % 6; // Size oscillates between 6 and 12
-    int squareSize2 = 10 + (currentMillis / 700) % 5; // Size oscillates between 10 and 15
+    int squareSize1 = 6 + (currentMillis / 500) % 6;   // Size oscillates between 6 and 12
+    int squareSize2 = 10 + (currentMillis / 700) % 5;  // Size oscillates between 10 and 15
     int x1 = abs((currentMillis / 20) % (SCREEN_WIDTH + squareSize1) - squareSize1);
     int x2 = SCREEN_WIDTH - abs((currentMillis / 30) % (SCREEN_WIDTH + squareSize2) - squareSize2);
     int y1 = (SCREEN_HEIGHT / 4) - (squareSize1 / 2);
@@ -118,7 +142,7 @@ void bootAnimation() {
     display.drawRect((SCREEN_WIDTH / 2) - rectSize, (SCREEN_HEIGHT / 2) - rectSize, rectSize * 2, rectSize * 2, SSD1306_WHITE);
 
     display.display();
-    delay(20); // Update the display every 20ms for smoother animation
+    delay(20);  // Update the display every 20ms for smoother animation
   }
 }
 
@@ -131,7 +155,7 @@ void staticText() {
   display.setCursor(0, 0);
   display.println(F("FlyCamCzech.eu"));
   display.setCursor(0, 13);
-  display.println(F("v. 1.0.0"));
+  display.println(F("v. 1.0.1"));
   display.setCursor(0, 25);
   display.println(F("MultiSPECTRAL"));
   display.display();
@@ -152,14 +176,14 @@ void camWaitingAnimation() {
     display.setCursor(0, 0);
     display.println(F("CAM1, CAM2 waiting"));
 
-    if ((digitalRead(A2) == HIGH) or (digitalRead(A1) == HIGH))  {
+    if ((digitalRead(A2) == HIGH) or (digitalRead(A1) == HIGH)) {
       break;
       delay(1);
     }
 
     // Draw loading animation (dots)
     unsigned long currentMillis = millis();
-    int numDots = (currentMillis / 500) % 4; // 0 to 3 dots
+    int numDots = (currentMillis / 500) % 4;  // 0 to 3 dots
     display.setCursor(0, 10);
     display.print(F("Connecting"));
     for (int i = 0; i < numDots; i++) {
@@ -199,7 +223,7 @@ void displayStatusScreen() {
 
   if (currentMillis - lastVoltageUpdate >= 3000) {
     int voltageValue = analogRead(A0);
-    displayedVoltage = voltageValue * (5.0 / 1023.0); // Assuming 5V reference voltage
+    displayedVoltage = voltageValue * (5.0 / 1023.0);  // Assuming 5V reference voltage
     lastVoltageUpdate = currentMillis;
   }
 
@@ -226,6 +250,5 @@ void displayStatusScreen() {
     display.print(F("0"));
   }
   display.print(seconds);
-
   display.display();
 }
