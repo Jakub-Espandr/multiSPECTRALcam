@@ -1,6 +1,11 @@
-# multiSPECTRAL Camera
+<p align="center">
+  <a href="https://ibb.co/ZzBgp1Kv">
+    <img src="https://i.ibb.co/fdkNzGtZ/FCCmulti-SPECTRAL.jpg" alt="multiSPECTRAL" width="500"/>
+  </a>
+</p>
 
-A custom multispectral imaging solution built on Raspberry Pi platform for aerial photography and agricultural monitoring.
+<h1 align="center">FlyCamCzech multiSPECTRALcamera</h1>
+<p align="center"><em>(Born4Flight | FlyCamCzech | Jakub Ešpandr)</em></p>
 
 ## 🎯 Overview
 
